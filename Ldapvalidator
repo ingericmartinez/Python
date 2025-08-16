@@ -1,0 +1,114 @@
+import tkinter as tk
+from tkinter import filedialog, ttk, messagebox
+import os
+import re
+
+# --- Lógica de Validación ---
+
+def check_file_contains(filepath, patterns):
+    """Verifica si un archivo contiene alguno de los patrones de texto."""
+    if not os.path.exists(filepath):
+        return False
+    try:
+        with open(filepath, 'r', encoding='utf-8') as f:
+            content = f.read()
+            for pattern in patterns:
+                if re.search(pattern, content):
+                    return True
+    except Exception as e:
+        print(f"Error reading file {filepath}: {e}")
+    return False
+
+def check_java_files_for(directory, patterns):
+    """Busca en todos los archivos .java de un directorio si contienen los patrones."""
+    for root, _, files in os.walk(directory):
+        for file in files:
+            if file.endswith(".java"):
+                if check_file_contains(os.path.join(root, file), patterns):
+                    return True
+    return False
+
+def run_validations(project_path):
+    """Ejecuta todas las validaciones en la ruta del proyecto y devuelve los resultados."""
+    results = {}
+    is_maven = os.path.exists(os.path.join(project_path, 'pom.xml'))
+    is_gradle = os.path.exists(os.path.join(project_path, 'build.gradle'))
+
+    # 1. Validación de Dependencias
+    build_file = ""
+    if is_maven:
+        build_file = os.path.join(project_path, 'pom.xml')
+    elif is_gradle:
+        build_file = os.path.join(project_path, 'build.gradle')
+    
+    results['dep_ldap'] = check_file_contains(build_file, ['spring-boot-starter-data-ldap', 'spring-security-ldap'])
+    results['dep_cache'] = check_file_contains(build_file, ['spring-boot-starter-cache'])
+    results['dep_cache_impl'] = check_file_contains(build_file, ['caffeine', 'ehcache', 'spring-boot-starter-data-redis'])
+
+    # 2. Validación de Configuración
+    config_prop_path = os.path.join(project_path, 'src', 'main', 'resources', 'application.properties')
+    config_yml_path = os.path.join(project_path, 'src', 'main', 'resources', 'application.yml')
+    
+    results['config_ldap'] = (
+        check_file_contains(config_prop_path, [r'spring\.ldap\.urls']) or
+        check_file_contains(config_yml_path, [r'spring:\s*\n\s*ldap:\s*\n\s*urls:'])
+    )
+    results['config_cache'] = (
+        check_file_contains(config_prop_path, [r'spring\.cache\.']) or
+        check_file_contains(config_yml_path, [r'spring:\s*\n\s*cache:'])
+    )
+
+    # 3. Validación de Código Java
+    java_source_path = os.path.join(project_path, 'src', 'main', 'java')
+    if os.path.exists(java_source_path):
+        results['code_enable_caching'] = check_java_files_for(java_source_path, ['@EnableCaching'])
+        results['code_caching_authenticator'] = check_java_files_for(java_source_path, ['CachingLdapAuthenticator'])
+    else:
+        results['code_enable_caching'] = False
+        results['code_caching_authenticator'] = False
+        
+    return results
+
+# --- Interfaz Gráfica (GUI) ---
+
+class App(tk.Tk):
+    def __init__(self):
+        super().__init__()
+        self.title("Validador LDAP + Cache para Spring Boot")
+        self.geometry("650x550")
+        self.resizable(False, False)
+
+        self.project_path = tk.StringVar()
+
+        # Estilos
+        style = ttk.Style(self)
+        style.configure('TLabel', font=('Helvetica', 12))
+        style.configure('Header.TLabel', font=('Helvetica', 14, 'bold'))
+        style.configure('TButton', font=('Helvetica', 12))
+        style.configure('Result.TLabel', font=('Helvetica', 12))
+        style.configure('TFrame', background='#f0f0f0')
+        self.configure(background='#f0f0f0')
+        
+        # --- Frame principal ---
+        main_frame = ttk.Frame(self, padding="20")
+        main_frame.pack(fill=tk.BOTH, expand=True)
+
+        # --- Sección de selección de proyecto ---
+        selection_frame = ttk.Frame(main_frame)
+        selection_frame.pack(fill=tk.X, pady=(0, 20))
+
+        select_btn = ttk.Button(selection_frame, text="📁 Seleccionar Proyecto", command=self.select_project)
+        select_btn.pack(side=tk.LEFT, padx=(0, 10))
+
+        path_label = ttk.Label(selection_frame, textvariable=self.project_path, relief="sunken", padding=5, background="white")
+        path_label.pack(side=tk.LEFT, fill=tk.X, expand=True)
+        self.project_path.set("Aún no se ha seleccionado una carpeta...")
+
+        # --- Botón de validación ---
+        validate_btn = ttk.Button(main_frame, text="Analizar Proyecto", command=self.validate_project, style='Accent.TButton')
+        style.configure('Accent.TButton', font=('Helvetica', 12, 'bold'), foreground='white', background='#007bff')
+        validate_btn.pack(fill=tk.X, pady=10)
+
+        # --- Frame para los resultados ---
+        self.results_frame = ttk.Frame(main_frame, padding="10", relief="groove")
+        self.results_frame.pack(fill=tk.BOTH,
